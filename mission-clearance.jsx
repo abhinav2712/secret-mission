@@ -24,7 +24,7 @@ const MISSION_CONFIG = {
   // May(5) · September(9) · September(9) · left hand(1)
   accessCode: "5991",
 
-  agentName: "BIRTHDAY GIRL",
+  agentName: "Unnati",
 
   hints: [
     { label: "DIGIT 01", text: "The month we officially met." },
@@ -35,6 +35,9 @@ const MISSION_CONFIG = {
 
   // How many of the three files she may open.
   picksAllowed: 2,
+
+  // Hours the leftover (unpicked) file stays locked before it can be opened too.
+  thirdFileLockHours: 12,
 
   // File 03 — target price challenge.
   targetAmount: 2750,
@@ -629,7 +632,7 @@ function Countdown({ clock }) {
 }
 
 /* ── sealed tile on the 3D shelf ─────────────────── */
-function FileTile({ file, index, state, onOpen }) {
+function FileTile({ file, index, state, onOpen, lockLabel }) {
   const tilt = [10, 0, -10][index] + "deg";
   const push = [-30, 20, -30][index] + "px";
   const isOpened = state === "opened";
@@ -642,7 +645,7 @@ function FileTile({ file, index, state, onOpen }) {
         style={{ "--accent": file.accent, "--ry": tilt, "--tz": push }}
         onClick={() => onOpen(file.id)}
         disabled={locked}
-        aria-label={locked ? `${file.title}, sealed` : `Open ${file.title}`}
+        aria-label={locked ? `${file.title}, locked for ${lockLabel}` : `Open ${file.title}`}
       >
         <span className="mc-face-front">
           <span className="mc-corner tl" aria-hidden="true" />
@@ -653,7 +656,7 @@ function FileTile({ file, index, state, onOpen }) {
           <span className="mc-tile-op">{file.op}</span>
           <span className="mc-tile-title">{file.title}</span>
           <span className="mc-tile-cta">
-            {isOpened ? <><Eye size={12} /> OPEN AGAIN</> : locked ? "SEALED · NO PICKS LEFT" : "TAP TO BREAK SEAL"}
+            {isOpened ? <><Eye size={12} /> OPEN AGAIN</> : locked ? `SEALED · UNLOCKS IN ${lockLabel}` : "TAP TO BREAK SEAL"}
           </span>
         </span>
       </button>
@@ -731,23 +734,62 @@ function FileModal({ file, onClose, claimed, onClaim, children }) {
   );
 }
 
+/* ── progress persistence (survives closing the tab) ── */
+const PROGRESS_KEY = "mc-progress-v1";
+
+function loadProgress() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PROGRESS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatLockRemaining(ms) {
+  const totalMin = Math.max(1, Math.ceil(ms / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}H ${m}M` : `${m}M`;
+}
+
 /* ── app ─────────────────────────────────────────── */
 export default function MissionClearance() {
   const [stage, setStage] = useState("locked");
   const [muted, setMuted] = useState(false);
-  const [opened, setOpened] = useState([]);
-  const [claimed, setClaimed] = useState({});
+  const [opened, setOpened] = useState(() => loadProgress()?.opened || []);
+  const [claimed, setClaimed] = useState(() => loadProgress()?.claimed || {});
+  const [lockStart, setLockStart] = useState(() => loadProgress()?.lockStart || null);
   const [active, setActive] = useState(null);
   const [zooming, setZooming] = useState(null);
   const [decrypted, setDecrypted] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const beep = useAudio(muted);
   const clock = useCountdown(beep);
 
   const MAX = MISSION_CONFIG.picksAllowed;
   const picksLeft = MAX - opened.length;
+  const LOCK_MS = MISSION_CONFIG.thirdFileLockHours * 60 * 60 * 1000;
+  const unlockAt = lockStart ? lockStart + LOCK_MS : null;
+  const thirdUnlocked = unlockAt ? now >= unlockAt : false;
   const { targetAmount: T, tolerance: TOL } = MISSION_CONFIG;
   const money = (n) => "₹" + n.toLocaleString("en-IN");
   const stamp = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
+
+  useEffect(() => {
+    window.localStorage.setItem(PROGRESS_KEY, JSON.stringify({ opened, claimed, lockStart }));
+  }, [opened, claimed, lockStart]);
+
+  useEffect(() => {
+    if (opened.length >= MAX && !lockStart) setLockStart(Date.now());
+  }, [opened.length, MAX, lockStart]);
+
+  useEffect(() => {
+    if (!lockStart || thirdUnlocked) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [lockStart, thirdUnlocked]);
 
   const FILES = [
     { id: "glow", accent: "#FF5FA2", op: "FILE 01", badge: "LEVEL 1 CLEARANCE", title: "Operation Glow Up", icon: Sparkles, claimLabel: "CLAIM MISSION" },
@@ -755,12 +797,17 @@ export default function MissionClearance() {
     { id: "target", accent: "#BE8CFF", op: "FILE 03", badge: "HIGH STAKES", title: "Operation Target Price", icon: Target, claimLabel: "ACCEPT CHALLENGE" },
   ];
 
-  const tileState = (id) =>
-    zooming === id ? "zooming" : zooming ? "receding" : opened.includes(id) ? "opened" : picksLeft > 0 ? "sealed" : "locked";
+  const tileState = (id) => {
+    if (zooming === id) return "zooming";
+    if (zooming) return "receding";
+    if (opened.includes(id)) return "opened";
+    if (picksLeft > 0) return "sealed";
+    return thirdUnlocked ? "sealed" : "locked";
+  };
 
   const openFile = (id) => {
     const isNew = !opened.includes(id);
-    if (isNew && picksLeft <= 0) return;
+    if (isNew && picksLeft <= 0 && !thirdUnlocked) return;
     beep(isNew ? "seal" : "whoosh");
     setZooming(id);
     setTimeout(() => {
@@ -915,9 +962,11 @@ export default function MissionClearance() {
             <div className="mc-quota">
               <div className="mc-quota-txt">
                 {picksLeft > 0 ? (
-                  <>Break the wax on <b>any {picksLeft}</b> {picksLeft === 1 ? "more file" : "files"}. Choose carefully — the third stays sealed.</>
+                  <>Break the wax on <b>any {picksLeft}</b> {picksLeft === 1 ? "more file" : "files"}. Choose carefully — the third locks itself for {MISSION_CONFIG.thirdFileLockHours}h.</>
+                ) : thirdUnlocked ? (
+                  <>Both picks spent. The last file has unsealed itself — go on.</>
                 ) : (
-                  <>Both picks spent. The last file keeps its secret.</>
+                  <>Both picks spent. The last file unseals itself in <b>{formatLockRemaining(unlockAt - now)}</b>.</>
                 )}
               </div>
               <div className="mc-pips">
@@ -930,7 +979,14 @@ export default function MissionClearance() {
 
             <div className="mc-shelf">
               {FILES.map((f, i) => (
-                <FileTile key={f.id} file={f} index={i} state={tileState(f.id)} onOpen={openFile} />
+                <FileTile
+                  key={f.id}
+                  file={f}
+                  index={i}
+                  state={tileState(f.id)}
+                  onOpen={openFile}
+                  lockLabel={!thirdUnlocked && unlockAt ? formatLockRemaining(unlockAt - now) : null}
+                />
               ))}
             </div>
 
@@ -940,7 +996,7 @@ export default function MissionClearance() {
                 <button className="mc-ghost" onClick={() => setMuted((m) => !m)}>
                   {muted ? <VolumeX size={13} /> : <Volume2 size={13} />}{muted ? "SOUND OFF" : "SOUND ON"}
                 </button>
-                <button className="mc-ghost" onClick={() => { setStage("locked"); setOpened([]); setClaimed({}); setActive(null); setDecrypted(false); }}>
+                <button className="mc-ghost" onClick={() => { setStage("locked"); setOpened([]); setClaimed({}); setActive(null); setDecrypted(false); setLockStart(null); }}>
                   <Lock size={13} /> RESEAL EVERYTHING
                 </button>
               </span>
