@@ -837,7 +837,7 @@ export default function MissionClearance() {
           <p>A high-value device is already moving through secure courier. Contents stay withheld until handover.</p>
           <div className="mc-redact">
             <div className={`mc-redact-body ${decrypted ? "" : "hidden"}`}>
-              “Captures memories instantly in your hands, with a retro aesthetic. Arrival expected soon.”
+              “I steal a second of your life and give it right back — smaller, squarer, and yours to hold before you've blinked twice.”
             </div>
             {!decrypted && (
               <button className="mc-decrypt" onClick={() => { beep("key"); setDecrypted(true); }}>TAP TO DECRYPT</button>
